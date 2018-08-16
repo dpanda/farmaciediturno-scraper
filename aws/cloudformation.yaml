@@ -1,0 +1,181 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "GoPharma environment"
+Resources:
+  GoPharmaLambdaExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+
+  GoPharmaLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Code:
+        S3Bucket: "gopharma-releases"
+        S3Key: "main20180518231715.zip"
+      Description: "GoPharma!"
+      FunctionName: "go-pharma"
+      Handler: "main"
+      MemorySize: "128"
+      ReservedConcurrentExecutions: "5"
+      Role: !GetAtt [GoPharmaLambdaExecutionRole, Arn]
+      Runtime: "go1.x"
+      Timeout: "30"
+
+  GoPharmaApi:
+    Type: "AWS::ApiGateway::RestApi"
+    Properties:
+      Name: "GoPharma API"
+      FailOnWarnings: "true"
+
+  LambdaPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        Action: "lambda:invokeFunction"
+        FunctionName: !GetAtt [GoPharmaLambdaFunction, Arn]
+        Principal: apigateway.amazonaws.com
+        SourceArn:
+          Fn::Join:
+          - ''
+          - - 'arn:aws:execute-api:'
+            - Ref: AWS::Region
+            - ":"
+            - Ref: AWS::AccountId
+            - ":"
+            - Ref: GoPharmaApi
+            - "/*"
+
+  ApiGatewayCloudWatchLogsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - apigateway.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+      - PolicyName: ApiGatewayLogsPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:DescribeLogGroups
+            - logs:DescribeLogStreams
+            - logs:PutLogEvents
+            - logs:GetLogEvents
+            - logs:FilterLogEvents
+            Resource: "*"
+
+  ApiGatewayAccount:
+      Type: AWS::ApiGateway::Account
+      Properties:
+        CloudWatchRoleArn: !GetAtt [ApiGatewayCloudWatchLogsRole, Arn]
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+    - GoPharmaRequest
+    Properties:
+      RestApiId:
+        Ref: GoPharmaApi
+      StageName: DummyStage # cannot be updated!
+
+  GoPharmaApiStage:
+    DependsOn:
+    - ApiGatewayAccount
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      DeploymentId:
+        Ref: ApiDeployment
+      MethodSettings:
+      - DataTraceEnabled: true
+        HttpMethod: "*"
+        LoggingLevel: INFO
+        ResourcePath: "/*"
+      RestApiId:
+        Ref: GoPharmaApi
+      StageName: LATEST
+
+  GoPharmaResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId:
+        Ref: GoPharmaApi
+      ParentId:
+        Fn::GetAtt:
+        - GoPharmaApi
+        - RootResourceId
+      PathPart: gopharma
+
+  GoPharmaRequest:
+    DependsOn: LambdaPermission
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: GET
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Join:
+          - ''
+          - - 'arn:aws:apigateway:'
+            - Ref: AWS::Region
+            - ":lambda:path/2015-03-31/functions/"
+            - Fn::GetAtt:
+              - GoPharmaLambdaFunction
+              - Arn
+            - "/invocations"
+#      Integration:
+#        Type: AWS
+#        IntegrationHttpMethod: POST
+#        Uri:
+#          Fn::Join:
+#          - ''
+#          - - 'arn:aws:apigateway:'
+#            - Ref: AWS::Region
+#            - ":lambda:path/2015-03-31/functions/"
+#            - Fn::GetAtt:
+#              - GoPharmaLambdaFunction
+#              - Arn
+#            - "/invocations"
+#        IntegrationResponses:
+#        - StatusCode: 200
+#        RequestTemplates:
+#          application/json:
+#            Fn::Join:
+#            - ''
+#            - - "{"
+#              - '  "feed": "$input.params(''feed'')"'
+#              - "}"
+      RequestParameters:
+        method.request.querystring.feed: false
+      ResourceId:
+        Ref: GoPharmaResource
+      RestApiId:
+        Ref: GoPharmaApi
+      MethodResponses:
+      - StatusCode: 200
+Outputs:
+  RootUrl:
+    Description: Root URL of the API gateway
+    Value:
+      Fn::Join:
+      - ''
+      - - https://
+        - Ref: GoPharmaApi
+        - ".execute-api."
+        - Ref: AWS::Region
+        - ".amazonaws.com"

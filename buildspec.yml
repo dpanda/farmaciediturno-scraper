@@ -1,0 +1,20 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - go get "github.com/PuerkitoBio/goquery"
+      - go get "github.com/aws/aws-lambda-go/events"
+      - go get "github.com/aws/aws-lambda-go/lambda"
+  build:	
+    commands:
+      - GOOS=linux GOARCH=amd64 go build -o main main.go
+  #post_build:
+  #  commands:
+  #    - zip main.zip main
+
+artifacts: 
+  files: 
+    - main
+    - aws/cloudformation.yaml
+  discard-paths: yes

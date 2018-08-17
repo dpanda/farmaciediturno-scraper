@@ -19,7 +19,7 @@ import (
 var errorLogger = log.New(os.Stderr, "ERROR ", log.Llongfile)
 
 type Pharmacy struct {
-	Id      string
+	Id      string   `json:"id"`
 	Name    string   `json:"name"`
 	Address string   `json:"address"`
 	Lat     float64  `json:"lat"`
@@ -44,7 +44,7 @@ func main() {
 }
 
 func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	pharmas, err := scrape(request.QueryStringParameters["address"])
+	pharmas, err := getPharmas(request.QueryStringParameters["address"])
 	if err != nil {
 		return serverError(err)
 	}

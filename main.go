@@ -7,29 +7,38 @@ import (
 	"regexp"
 	"strings"
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/aws/aws-lambda-go/lambda"
 	"golang.org/x/net/context"
 	"encoding/json"
 	"log"
 	"os"
+	"strconv"
+	"fmt"
+	"github.com/aws/aws-lambda-go/lambda"
 )
 
 var errorLogger = log.New(os.Stderr, "ERROR ", log.Llongfile)
 
 type Pharmacy struct {
+	Id      string
 	Name    string   `json:"name"`
 	Address string   `json:"address"`
+	Lat     float64  `json:"lat"`
+	Lon     float64  `json:"lon"`
 	Phones  []string `json:"phones"`
+}
+
+func (p Pharmacy) String() string {
+	return fmt.Sprintf("[\n%d\n%d\n%d\n%d,%d\n]",
+		p.Name, p.Address, p.Phones[0], p.Lat, p.Lon)
 }
 
 func main() {
 	lambda.Start(HandleRequest)
 	/*
-	pharmas := scrape("piazza brembana")
-
+	pharmas, _ := getPharmas("piazza brembana")
 	for i := range pharmas {
 		pharma := pharmas[i]
-		fmt.Println(pharma.Name + "\n" + pharma.Address + "\n" + pharma.Phones[0] + "\n-----")
+		fmt.Println(pharma)
 	}
 	*/
 }
@@ -44,11 +53,30 @@ func HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (
 	if err != nil {
 		return serverError(err)
 	}
-	//return pharmas, nil //events.APIGatewayProxyResponse{Body: pharmas, Headers: headers, StatusCode: 200}, nil
 	return events.APIGatewayProxyResponse{
 		StatusCode: http.StatusOK,
 		Body:       string(jsonPharmas),
 	}, nil
+}
+
+func getPharmas(address string) ([]Pharmacy, error) {
+	pharmas, err := scrape(address)
+	if err != nil {
+		return nil, err
+	}
+
+	done := make(chan bool)
+	for i := range pharmas {
+		pharma := &pharmas[i]
+		go func() {
+			fillLatLon(pharma)
+			done <- true
+		}()
+	}
+	for i := 0; i < len(pharmas); i++ {
+		<-done
+	}
+	return pharmas, nil
 }
 
 func scrape(address string) ([]Pharmacy, error) {
@@ -62,6 +90,7 @@ func scrape(address string) ([]Pharmacy, error) {
 		return nil, err
 	}
 
+	idregexp, _ := regexp.Compile("[0-9]+")
 	phoneregexp, _ := regexp.Compile("[0-9]{8,15}")
 
 	pharmas := []Pharmacy{}
@@ -73,6 +102,9 @@ func scrape(address string) ([]Pharmacy, error) {
 		name := btag.Find("a").Text()
 
 		atag := btag.Next()
+		href, _ := atag.Attr("href")
+		id := idregexp.FindString(href)
+
 		atag.Find("b").BeforeHtml("&nbsp;")
 
 		addrs := atag.Text()
@@ -82,13 +114,37 @@ func scrape(address string) ([]Pharmacy, error) {
 		addrs = strings.Replace(addrs, "Tel.", "", 1)
 		addrs = strings.Replace(addrs, " , ", "", 3)
 
-		pharma := Pharmacy{name, addrs, phones}
+		pharma := Pharmacy{id, name, addrs, 0, 0, phones}
 
 		pharmas = append(pharmas, pharma)
 
 	})
 
 	return pharmas, nil
+}
+
+func fillLatLon(pharmacy *Pharmacy) {
+
+	resp, err := http.Get("https://www.farmaciediturno.org/farmacia.asp?idf=" + pharmacy.Id)
+	if err != nil {
+		return
+	}
+	htmlDoc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		return
+	}
+
+	href, exists := htmlDoc.Find("table table td a.mnu").Attr("href")
+	if exists {
+		hrefUrl, _ := url.Parse(href)
+		latLon := strings.Split(hrefUrl.Query().Get("saddr"), ",")
+		lat, _ := strconv.ParseFloat(latLon[0], 64)
+		lon, _ := strconv.ParseFloat(latLon[1], 64)
+		pharmacy.Lat = lat
+		pharmacy.Lon = lon
+	}
+	return
+
 }
 
 func serverError(err error) (events.APIGatewayProxyResponse, error) {
